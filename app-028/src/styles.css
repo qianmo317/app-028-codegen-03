@@ -569,6 +569,28 @@ table.data tr:hover td {
 .steps .step.done {
   color: var(--ink-3);
 }
+.steps .step.violation {
+  background: var(--danger-soft);
+}
+.steps .step.violation.done {
+  color: var(--danger);
+}
+
+/* ---------- 设备判定 ---------- */
+.card-bad {
+  border-color: #f0c6c6;
+  box-shadow: 0 0 0 1px var(--danger-soft);
+}
+.mini-cutter {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #fafbfd;
+}
+.mini-cutter.bad {
+  border-color: #f0c6c6;
+  background: var(--danger-soft);
+}
 .steps .step .idx {
   font-family: var(--font-mono);
   font-weight: 700;

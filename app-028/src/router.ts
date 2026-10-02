@@ -4,6 +4,7 @@ import LayoutView from './views/LayoutView.vue'
 import CutView from './views/CutView.vue'
 import ExportView from './views/ExportView.vue'
 import PapersView from './views/PapersView.vue'
+import CuttersView from './views/CuttersView.vue'
 import SettingsView from './views/SettingsView.vue'
 
 const routes: RouteRecordRaw[] = [
@@ -12,6 +13,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/cut/:id', name: 'cut', component: CutView, meta: { title: '裁切步骤' } },
   { path: '/export/:id', name: 'export', component: ExportView, meta: { title: '导出' } },
   { path: '/papers', name: 'papers', component: PapersView, meta: { title: '相纸与照片尺寸库' } },
+  { path: '/cutters', name: 'cutters', component: CuttersView, meta: { title: '裁切设备档案' } },
   { path: '/settings', name: 'settings', component: SettingsView, meta: { title: '裁切参数' } },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ]

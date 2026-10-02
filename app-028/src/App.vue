@@ -12,6 +12,7 @@ import { RouterLink, RouterView } from 'vue-router'
       <nav class="nav">
         <RouterLink to="/" exact-active-class="active" active-class="">新建任务</RouterLink>
         <RouterLink to="/papers" active-class="active">尺寸库</RouterLink>
+        <RouterLink to="/cutters" active-class="active">设备档案</RouterLink>
         <RouterLink to="/settings" active-class="active">裁切参数</RouterLink>
       </nav>
       <div class="spacer"></div>

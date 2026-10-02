@@ -11,7 +11,10 @@ import {
 } from './logic/library'
 import { pack, sheetsFromPlacements } from './logic/packer'
 import { loadJSON, saveJSON } from './logic/storage'
+import cuttersJson from './data/cutters.json'
+import type { JudgeContext } from './logic/cutter'
 import type {
+  Cutter,
   Leftover,
   Paper,
   PaperTemplate,
@@ -29,7 +32,11 @@ const KEY = {
   settings: 'ppis.settings.v1',
   tasks: 'ppis.tasks.v1',
   leftovers: 'ppis.leftovers.v1',
+  cutters: 'ppis.cutters.v1',
+  selectedCutter: 'ppis.selectedCutter.v1',
 }
+
+export const BUILTIN_CUTTERS: Cutter[] = cuttersJson.cutters as Cutter[]
 
 export const DEFAULT_SETTINGS: Settings = {
   gapMm: 0,
@@ -44,12 +51,25 @@ export const customSizes = ref<PhotoSize[]>(loadJSON<PhotoSize[]>(KEY.customSize
 export const settings = ref<Settings>({ ...DEFAULT_SETTINGS, ...loadJSON(KEY.settings, {}) })
 export const tasks = ref<Task[]>(loadJSON<Task[]>(KEY.tasks, []))
 export const leftovers = ref<Leftover[]>(loadJSON<Leftover[]>(KEY.leftovers, []))
+/**
+ * 设备档案：首次使用时以内置机器为种子（老师傅可改参数，改动落 localStorage），
+ * 之后完全以本机登记为准。
+ */
+export const cutters = ref<Cutter[]>(loadJSON<Cutter[]>(KEY.cutters, BUILTIN_CUTTERS))
+const savedSelectedCutter = loadJSON<string>(KEY.selectedCutter, '')
+export const selectedCutterId = ref<string>(
+  savedSelectedCutter && cutters.value.some((c) => c.id === savedSelectedCutter)
+    ? savedSelectedCutter
+    : cutters.value[0]?.id ?? '',
+)
 
 watch(customPapers, (v) => saveJSON(KEY.customPapers, v), { deep: true })
 watch(customSizes, (v) => saveJSON(KEY.customSizes, v), { deep: true })
 watch(settings, (v) => saveJSON(KEY.settings, v), { deep: true })
 watch(tasks, (v) => saveJSON(KEY.tasks, v), { deep: true })
 watch(leftovers, (v) => saveJSON(KEY.leftovers, v), { deep: true })
+watch(cutters, (v) => saveJSON(KEY.cutters, v), { deep: true })
+watch(selectedCutterId, (v) => saveJSON(KEY.selectedCutter, v))
 
 export const allPapers = computed<Paper[]>(() => [...BUILTIN_PAPERS, ...customPapers.value])
 export const allSizes = computed<PhotoSize[]>(() => [...BUILTIN_PHOTO_SIZES, ...customSizes.value])
@@ -174,6 +194,18 @@ export function sheetsOf(task: Task): Sheet[] {
   return task.result?.sheets ?? []
 }
 
+/** 设备判定所需的上下文（手工调过摆位后取的就是最新版面，判定随之自动刷新） */
+export function judgeContextOf(task: Task): JudgeContext {
+  const paper = resolvePaper(task, allPapers.value)
+  return {
+    paper,
+    safeEdgeMm: task.safeEdgeMm,
+    kerfMm: task.kerfMm,
+    gapMm: task.gapMm,
+    sheets: sheetsOf(task),
+  }
+}
+
 export function manualPlacementsOf(task: Task): Placement[] {
   if (task.manual) return task.manual.placements
   return (task.result?.sheets ?? []).flatMap((s) => s.placements)
@@ -242,5 +274,46 @@ export function removeLeftover(id: string): void {
 export function markLeftoverUsed(id: string): void {
   leftovers.value = leftovers.value.map((l) =>
     l.id === id ? { ...l, usedCount: l.usedCount + 1 } : l,
+  )
+}
+
+// ---------- 裁切设备档案 ----------
+
+/** 当前选中的机器（裁切步骤页按它显示能不能裁；机器被删时回落到第一台） */
+export const selectedCutter = computed<Cutter | undefined>(
+  () => cutters.value.find((c) => c.id === selectedCutterId.value) ?? cutters.value[0],
+)
+
+export function selectCutter(id: string): void {
+  selectedCutterId.value = id
+}
+
+export function addCutter(c: Omit<Cutter, 'id' | 'builtin'>): Cutter {
+  const cutter: Cutter = { ...c, id: newId('cutter'), builtin: false }
+  cutters.value = [...cutters.value, cutter]
+  selectedCutterId.value = cutter.id
+  return cutter
+}
+
+export function updateCutter(id: string, patch: Partial<Cutter>): void {
+  cutters.value = cutters.value.map((c) => (c.id === id ? { ...c, ...patch, id: c.id } : c))
+}
+
+export function removeCutter(id: string): void {
+  cutters.value = cutters.value.filter((c) => c.id !== id)
+  if (selectedCutterId.value === id) selectedCutterId.value = cutters.value[0]?.id ?? ''
+}
+
+/** 单台内置机器恢复出厂参数 */
+export function resetBuiltinCutter(id: string): void {
+  const seed = BUILTIN_CUTTERS.find((c) => c.id === id)
+  if (!seed) return
+  cutters.value = cutters.value.map((c) => (c.id === id ? { ...seed } : c))
+}
+
+/** 全部内置机器恢复出厂（自定义机器保留） */
+export function resetAllBuiltinCutters(): void {
+  cutters.value = cutters.value.map((c) =>
+    c.builtin ? BUILTIN_CUTTERS.find((b) => b.id === c.id) ?? c : c,
   )
 }

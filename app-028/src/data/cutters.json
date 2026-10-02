@@ -1,0 +1,64 @@
+{
+  "cutters": [
+    {
+      "id": "c_roller_1250",
+      "name": "1 号 · 手工滚轮裁刀（1.2m 导轨）",
+      "kind": "roller",
+      "maxSheetWMm": 1250,
+      "maxSheetHMm": 800,
+      "minSheetWMm": 50,
+      "minSheetHMm": 40,
+      "minStripMm": 40,
+      "bladeMm": 0.3,
+      "maxLayers": 1,
+      "maxCutsPerSheet": 0,
+      "note": "大刀门靠导轨走直线，只能一张一张推；窄条挡不住、会跑偏，细活别用它",
+      "builtin": true
+    },
+    {
+      "id": "c_guillotine_s",
+      "name": "2 号 · 精密小铡刀（430mm）",
+      "kind": "guillotine",
+      "maxSheetWMm": 430,
+      "maxSheetHMm": 430,
+      "minSheetWMm": 60,
+      "minSheetHMm": 50,
+      "minStripMm": 25,
+      "bladeMm": 0.5,
+      "maxLayers": 8,
+      "maxCutsPerSheet": 0,
+      "note": "证件照窄条专用，后挡规最小能定到 25mm；一次最多压 8 张",
+      "builtin": true
+    },
+    {
+      "id": "c_guillotine_l",
+      "name": "3 号 · 重型手动铡刀（520mm）",
+      "kind": "guillotine",
+      "maxSheetWMm": 520,
+      "maxSheetHMm": 460,
+      "minSheetWMm": 80,
+      "minSheetHMm": 60,
+      "minStripMm": 40,
+      "bladeMm": 0.8,
+      "maxLayers": 15,
+      "maxCutsPerSheet": 0,
+      "note": "厚刀一次能压 15 张大条，但刀厚 0.8mm，排样刀宽补偿要放到 0.8 以上",
+      "builtin": true
+    },
+    {
+      "id": "c_electric_720",
+      "name": "4 号 · 电动程控裁切机（720mm）",
+      "kind": "electric",
+      "maxSheetWMm": 720,
+      "maxSheetHMm": 720,
+      "minSheetWMm": 100,
+      "minSheetHMm": 80,
+      "minStripMm": 30,
+      "bladeMm": 1.0,
+      "maxLayers": 40,
+      "maxCutsPerSheet": 60,
+      "note": "批量活主力，一次压 40 张；单张程序超过 60 刀要拆程序；刀厚 1.0mm",
+      "builtin": true
+    }
+  ]
+}

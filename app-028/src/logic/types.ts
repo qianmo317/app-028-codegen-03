@@ -166,3 +166,31 @@ export interface PaperTemplate {
     keepTogether: boolean
   }>
 }
+
+/** 裁切设备类型：裁刀（手工滚轮刀）/ 铡刀（手动平压切纸机）/ 电动裁切机 */
+export type CutterKind = 'roller' | 'guillotine' | 'electric'
+
+/** 设备档案：每台机器能裁多大、能裁多窄的条、刀口多宽、一次能压几层 */
+export interface Cutter {
+  id: string
+  name: string
+  kind: CutterKind
+  /** 最大可裁幅面（mm）：纸的宽/高均不得超过，允许把纸转 90° 上刀 */
+  maxSheetWMm: number
+  maxSheetHMm: number
+  /** 最小可裁幅面（mm）：整张纸过小的话连压都压不住、无法下刀；0 = 不限 */
+  minSheetWMm: number
+  minSheetHMm: number
+  /** 最小条宽（mm）：后挡规能定到的最窄位置，比这窄的条夹不住；0 = 不限 */
+  minStripMm: number
+  /** 刀口宽度（mm）：刀片本身的厚度，必须 ≤ 排样预留的刀宽补偿 kerf，否则会切进照片 */
+  bladeMm: number
+  /** 单次可裁层数：一次最多能压多少张相同版面；0 = 不限 */
+  maxLayers: number
+  /** 单张最多刀数：超过后定位累积误差不可接受（电动程控机按程序刀数）；0 = 不限 */
+  maxCutsPerSheet: number
+  /** 备注（老师傅经验） */
+  note: string
+  /** true = 店内内置设备（可编辑参数、可恢复出厂，不可删除） */
+  builtin: boolean
+}

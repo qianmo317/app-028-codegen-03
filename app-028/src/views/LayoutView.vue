@@ -7,15 +7,21 @@ import {
   addLeftover,
   allPapers,
   allSizes,
+  cutters,
   getTask,
+  judgeContextOf,
   makeThumbResolver,
   manualPlacementsOf,
   resetManual,
+  runPack,
+  selectCutter,
+  selectedCutterId,
   setManual,
   sheetsOf,
   photoVersion,
 } from '../store'
 import { comparePapers, computeCost } from '../logic/cost'
+import { FAIL_KIND_LABEL, judgeAll } from '../logic/cutter'
 import { findPhotoSize, groupsFromTask, resolvePaper, sizeLabel } from '../logic/library'
 import { formatCents, formatPercent } from '../logic/units'
 import type { PaperCompare } from '../logic/cost'
@@ -39,6 +45,19 @@ const totalPhotos = computed(() =>
 )
 const totalSteps = computed(() => sheets.value.reduce((acc, s) => acc + s.cutSteps.length, 0))
 const rawSteps = computed(() => sheets.value.reduce((acc, s) => acc + s.rawCutCount, 0))
+
+// 设备适配判定（手工调过摆位后 sheetsOf 变，这里自动重判）
+const cutterVerdicts = computed(() => {
+  const t = task.value
+  if (!t) return []
+  return judgeAll(cutters.value, judgeContextOf(t))
+})
+const suitableCutters = computed(() => cutterVerdicts.value.filter((v) => v.ok))
+const currentCutterVerdict = computed(
+  () =>
+    cutterVerdicts.value.find((v) => v.cutter.id === selectedCutterId.value) ??
+    cutterVerdicts.value[0],
+)
 
 const thumbs = computed(() => {
   void photoVersion.value
@@ -208,6 +227,16 @@ function doReset() {
   resetManual(t)
   localMsg.value = '已恢复自动排样结果'
   selectedSeq.value = -1
+}
+
+/** 按选中机器的刀口厚度调大 kerf 并重新排样（不离开本页） */
+function fixKerfAndRepack() {
+  const t = task.value
+  const c = currentCutterVerdict.value?.cutter
+  if (!t || !c) return
+  t.kerfMm = Math.max(t.kerfMm, c.bladeMm)
+  const err = runPack(t)
+  localMsg.value = err ? `重排失败：${err}` : `刀宽补偿已调到 ${t.kerfMm}mm 并重新排样`
 }
 
 function registerWaste(w: number, h: number) {
@@ -390,6 +419,91 @@ watch(
             <dt>切割步数（未合并）</dt>
             <dd>{{ rawSteps }}</dd>
           </div>
+        </div>
+
+        <div class="card">
+          <h3>
+            设备适配
+            <button class="btn link small" @click="goto('cut')">去裁切页看逐刀判定 →</button>
+          </h3>
+          <div class="card-sub">
+            按本方案的切割步骤（每张 {{ totalSteps }} 刀）逐台机器判定；手工调过摆位后自动重判
+          </div>
+          <div v-if="!cutterVerdicts.length" class="note">请先到「设备档案」登记裁切设备</div>
+          <template v-else>
+            <label class="field" style="margin-bottom: 8px">
+              当前选中机器（裁切步骤页按它逐刀显示）
+              <select
+                :value="selectedCutterId"
+                @change="selectCutter(String(($event.target as HTMLSelectElement).value))"
+              >
+                <option v-for="v in cutterVerdicts" :key="v.cutter.id" :value="v.cutter.id">
+                  {{ v.cutter.name }}{{ v.ok ? ' ✓' : ' ✗' }}
+                </option>
+              </select>
+            </label>
+            <div class="note ok" v-if="suitableCutters.length">
+              <strong>适合本机使用（{{ suitableCutters.length }} 台）：</strong>
+              {{ suitableCutters.map((v) => v.cutter.name).join('、') }}
+            </div>
+            <div class="note danger" v-else>没有一台机器能裁当前方案，请看下方不适合原因</div>
+            <table class="data" style="margin-top: 8px">
+              <thead>
+                <tr>
+                  <th>机器</th>
+                  <th>判定</th>
+                  <th>原因 / 关键数据</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="v in cutterVerdicts" :key="v.cutter.id">
+                  <td>{{ v.cutter.name }}</td>
+                  <td>
+                    <span class="badge" :class="v.ok ? 'ok' : 'danger'">{{ v.ok ? '适合' : '不适合' }}</span>
+                  </td>
+                  <td style="font-size: 12px">
+                    <template v-if="v.ok">
+                      共 {{ v.sheetVerdicts.reduce((n, s) => n + s.analysis.cutCount, 0) }} 刀 ｜
+                      最长刀 {{ Math.max(...v.sheetVerdicts.map((s) => s.analysis.maxCutLength)) }}mm ｜
+                      最窄条 {{ Math.min(...v.sheetVerdicts.map((s) => s.analysis.narrowestStrip)) }}mm
+                    </template>
+                    <template v-else>
+                      <span
+                        v-for="(k, i) in [...new Set([
+                          ...v.jobFails.map((f) => f.kind),
+                          ...v.sheetVerdicts.flatMap((sv) => sv.fails.map((f) => f.kind)),
+                        ])]"
+                        :key="i"
+                        class="badge danger"
+                        style="margin-right: 4px"
+                        >{{ FAIL_KIND_LABEL[k as keyof typeof FAIL_KIND_LABEL] }}</span
+                      >
+                    </template>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-if="currentCutterVerdict && !currentCutterVerdict.ok" class="stack" style="margin-top: 8px">
+              <div
+                v-for="(s, i) in currentCutterVerdict.suggestions"
+                :key="i"
+                class="note warn"
+                style="font-size: 12.5px"
+              >
+                {{ s }}
+              </div>
+              <div class="row tight">
+                <button class="btn small" @click="goto('cut')">去裁切页换纸/逐刀查看</button>
+                <button
+                  v-if="currentCutterVerdict.jobFails.some((f) => f.kind === 'blade')"
+                  class="btn small"
+                  @click="fixKerfAndRepack"
+                >
+                  刀宽补偿调到 {{ currentCutterVerdict.cutter.bladeMm }}mm 并重排
+                </button>
+              </div>
+            </div>
+          </template>
         </div>
 
         <div v-if="lowUtil" class="card">

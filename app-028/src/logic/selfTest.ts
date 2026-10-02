@@ -4,9 +4,10 @@
 import { validateCutSequence, type CutLine, type Rect } from './guillotine'
 import { BUILTIN_PAPERS, BUILTIN_PHOTO_SIZES } from './library'
 import { pack, sheetsFromPlacements, usableRegion, type PackGroup, type PackOptions } from './packer'
+import { judgeCutter, suggestPapersForCutter, type JudgeContext } from './cutter'
 import { buildPdf } from './pdf'
 import { MM_TO_PT, mmToPt, mmToPx, pxToMm } from './units'
-import type { Paper, Placement, Sheet } from './types'
+import type { Cutter, Paper, Placement, Sheet } from './types'
 
 export interface AssertionResult {
   id: string
@@ -482,6 +483,116 @@ function assertPerformance(): AssertionResult {
   }
 }
 
+/** ⑧ 设备档案判定：幅面超限 / 条太窄 / 刀数太多 / 刀口太厚 四类原因 + 换纸建议 */
+function assertCutterJudgment(): AssertionResult {
+  const t0 = performance.now()
+  const problems: string[] = []
+  const paper = BUILTIN_PAPERS.find((p) => p.id === 'pa3') as Paper
+  const one = BUILTIN_PHOTO_SIZES.find((s) => s.id === 's1cun')!
+  const opts: PackOptions = {
+    paperW: paper.wMm,
+    paperH: paper.hMm,
+    marginMm: paper.marginMm,
+    safeEdgeMm: 3,
+    gapMm: 0,
+    kerfMm: 0.5,
+    allowRotate: false,
+  }
+  const out = pack(
+    [{ itemId: 'a', copies: 16, photoW: one.wMm, photoH: one.hMm, allowRotate: false, keepTogether: false }],
+    opts,
+  )
+  if (out.error) return { id: 'cutter', title: '⑧ 设备判定', pass: false, detail: out.error, ms: 0 }
+
+  const ctx: JudgeContext = {
+    paper,
+    safeEdgeMm: 3,
+    kerfMm: 0.5,
+    gapMm: 0,
+    sheets: out.result.sheets,
+  }
+  const base: Cutter = {
+    id: 't',
+    name: '测试机',
+    kind: 'guillotine',
+    maxSheetWMm: 500,
+    maxSheetHMm: 500,
+    minSheetWMm: 0,
+    minSheetHMm: 0,
+    minStripMm: 10,
+    bladeMm: 0.5,
+    maxLayers: 0,
+    maxCutsPerSheet: 0,
+    note: '',
+    builtin: false,
+  }
+
+  // 基线：大刀门、条宽宽松、刀数不限、刀口正好 0.5 —— 必须通过
+  const okV = judgeCutter(base, ctx)
+  if (!okV.ok) problems.push(`基线机器应能裁，实际失败：${okV.jobFails.map((f) => f.message).join('；')}`)
+
+  // 逐刀实测：每刀刀长 = to−from，且最窄含照片条不大于 1 寸照片的 35mm 边
+  for (const v of okV.sheetVerdicts) {
+    const s = out.result.sheets[v.sheetIndex]
+    v.analysis.perStep.forEach((m, i) => {
+      const expectLen = Math.abs(s.cutSteps[i].to - s.cutSteps[i].from)
+      if (Math.abs(m.lengthMm - expectLen) > 0.05) {
+        problems.push(`第 ${v.sheetIndex + 1} 张第 ${i + 1} 刀刀长量错：${m.lengthMm} vs ${expectLen}`)
+      }
+    })
+    if (v.analysis.cutCount !== s.cutSteps.length) problems.push('刀数统计与切割步骤数不一致')
+    if (!(v.analysis.narrowestStrip > 0 && v.analysis.narrowestStrip <= 35 + 0.6)) {
+      problems.push(`最窄条宽应在 (0,35.6]mm，实际 ${v.analysis.narrowestStrip}mm`)
+    }
+  }
+
+  const failKinds = (over: Partial<Cutter>): string[] => {
+    const v = judgeCutter({ ...base, ...over }, ctx)
+    if (v.ok) problems.push(`机器 ${JSON.stringify(over)} 应判为不适合，实际通过了`)
+    if (!v.suggestions.length) problems.push(`机器 ${JSON.stringify(over)} 未给出改纸/换设备建议`)
+    return [
+      ...v.jobFails.map((f) => f.kind),
+      ...v.sheetVerdicts.flatMap((sv) => sv.fails.map((f) => f.kind)),
+    ]
+  }
+
+  // 幅面超限：刀门只有 200
+  const fmtKinds = failKinds({ maxSheetWMm: 200, maxSheetHMm: 200 })
+  if (!fmtKinds.includes('format')) problems.push('刀门 200 裁 A3 应报「幅面」')
+  // 条太窄：后挡规最小 100mm
+  const stripKinds = failKinds({ minStripMm: 100 })
+  if (!stripKinds.includes('strip')) problems.push('最小条宽 100mm 裁 1 寸条应报「条太窄」')
+  // 刀数太多：单张最多 1 刀
+  const cutKinds = failKinds({ maxCutsPerSheet: 1 })
+  if (!cutKinds.includes('cuts')) problems.push('单张 1 刀上限应报「刀数太多」')
+  // 刀口太厚：blade 2mm > kerf 0.5
+  const bladeKinds = failKinds({ bladeMm: 2 })
+  if (!bladeKinds.includes('blade')) problems.push('刀口 2mm 对 kerf 0.5 应报「刀口太厚」')
+
+  // 换纸建议：小刀门机器重排 8 张 1 寸，应推荐 5×7/4×6 而不是 A3
+  const small: Cutter = { ...base, id: 'small', maxSheetWMm: 180, maxSheetHMm: 180, minStripMm: 0 }
+  const suggestions = suggestPapersForCutter(
+    small,
+    [{ itemId: 'a', copies: 8, photoW: one.wMm, photoH: one.hMm, allowRotate: false, keepTogether: false }],
+    { safeEdgeMm: 3, gapMm: 0, kerfMm: 0.5, allowRotate: false },
+    BUILTIN_PAPERS,
+  )
+  if (!suggestions.some((s) => s.paper.id === 'p5x7')) problems.push('换纸建议里应包含 5×7 相纸')
+  if (suggestions.some((s) => s.paper.id === 'pa3')) problems.push('换纸建议不应包含刀门放不下的 A3')
+  if (suggestions.some((s) => !s.verdict.ok)) problems.push('换纸建议只应包含该机器真的能裁的纸')
+
+  const sample = okV.sheetVerdicts[0]?.analysis
+  return {
+    id: 'cutter',
+    title: '⑧ 设备档案判定：逐刀量刀长/条宽/刀数，幅面、条太窄、刀数、刀口四类原因与换纸建议',
+    pass: problems.length === 0,
+    detail: problems.length
+      ? problems.join('；')
+      : `A3 排 16 张 1 寸：基线机通过；样例纸张 ${sample?.cutCount} 刀、最长刀 ${sample?.maxCutLength}mm、最窄条 ${sample?.narrowestStrip}mm；大刀门/窄挡规/1 刀上限/厚刀四种机器分别准确报「幅面/条太窄/刀数/刀口」；换纸建议给出 5×7 且不含 A3`,
+    ms: Math.round(performance.now() - t0),
+  }
+}
+
 export async function runSelfTest(): Promise<AssertionResult[]> {
   const results: AssertionResult[] = []
   results.push(assertGuillotine())
@@ -501,5 +612,6 @@ export async function runSelfTest(): Promise<AssertionResult[]> {
     })
   }
   results.push(assertPerformance())
+  results.push(assertCutterJudgment())
   return results
 }
