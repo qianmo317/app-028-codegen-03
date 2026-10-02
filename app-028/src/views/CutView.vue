@@ -3,8 +3,17 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import SheetView from '../components/SheetView.vue'
 import RulerScale from '../components/RulerScale.vue'
-import { allPapers, getTask, makeThumbResolver, photoVersion, sheetsOf } from '../store'
+import CutterPanel from '../components/CutterPanel.vue'
+import {
+  allPapers,
+  getTask,
+  makeThumbResolver,
+  photoVersion,
+  selectedCutter,
+  sheetsOf,
+} from '../store'
 import { resolvePaper } from '../logic/library'
+import { FAIL_LABEL, judgeAllCutters, judgeSheet } from '../logic/cutter'
 import type { CutStep, Task } from '../logic/types'
 
 const route = useRoute()
@@ -21,6 +30,38 @@ let timer: number | undefined
 const sheet = computed(() => sheets.value[Math.min(activeSheet.value, sheets.value.length - 1)])
 const steps = computed(() => sheet.value?.cutSteps ?? [])
 const totalSteps = computed(() => steps.value.length)
+
+/** 按当前选中设备对本张纸的判定（手工微调 / 换机器后自动重算） */
+const cutterOpts = computed(() => {
+  const p = paper.value
+  const t = task.value
+  return {
+    paperW: p.wMm,
+    paperH: p.hMm,
+    marginMm: p.marginMm,
+    safeEdgeMm: t?.safeEdgeMm ?? 0,
+    gapMm: t?.gapMm ?? 0,
+    kerfMm: t?.kerfMm ?? 0,
+    allowRotate: t?.allowRotate ?? true,
+  }
+})
+const sheetVerdict = computed(() =>
+  task.value && sheet.value
+    ? judgeSheet(sheet.value, paper.value, cutterOpts.value, selectedCutter.value)
+    : undefined,
+)
+
+/** 当前设备对整单（全部纸张）的判定 */
+const wholeVerdict = computed(() =>
+  task.value
+    ? judgeAllCutters(sheets.value, paper.value, cutterOpts.value, [selectedCutter.value])[0]
+    : undefined,
+)
+const badSheetNos = computed(() =>
+  (wholeVerdict.value?.sheets ?? [])
+    .filter((s) => !s.ok)
+    .map((s) => s.sheetIndex + 1),
+)
 
 const thumbs = computed(() => {
   void photoVersion.value
@@ -125,12 +166,27 @@ function goto(routeName: string) {
       手工微调后的排样不满足 guillotine 贯通裁切，导出已停用：{{ task.manual.message }}
     </div>
 
+    <!-- 同一版面换机器必须换纸 / 换设备时，上裁切台前就当场说明 -->
+    <div
+      v-if="wholeVerdict && !wholeVerdict.ok"
+      class="note danger no-print"
+      style="font-size: 13.5px"
+    >
+      <strong>⚠ 当前选用的「{{ selectedCutter.name }}」裁不了这单：</strong>
+      第 {{ badSheetNos.join('、') }} 张判定不通过（{{
+        Array.from(new Set(wholeVerdict.sheets.flatMap((s) => s.failures))).map((f) => FAIL_LABEL[f]).join(' + ')
+      }}）。请先在下方「设备判定」里换设备或按建议改纸，不要上刀。
+    </div>
+
     <div class="grid sidebar no-print">
       <div class="stack">
         <div class="card">
           <h3>
             纸面视图
             <span class="badge">{{ step >= totalSteps ? '已切完' : `当前第 ${step + 1} 刀` }}</span>
+            <span v-if="sheetVerdict" class="badge" :class="sheetVerdict.ok ? 'ok' : 'danger'">
+              {{ selectedCutter.name }}：{{ sheetVerdict.ok ? '能裁' : '不能裁' }}
+            </span>
           </h3>
           <div class="card-sub">灰线 = 待切，红线 = 当前这一刀，绿线 = 已完成</div>
           <div class="row" style="margin-bottom: 8px">
@@ -179,8 +235,16 @@ function goto(routeName: string) {
         </div>
 
         <div class="card">
+          <h3>设备判定（按选中机器逐刀判定能不能裁）</h3>
+          <CutterPanel :task="task" :paper="paper" :sheets="sheets" variant="detail" />
+        </div>
+
+        <div class="card">
           <h3>步骤清单（第 {{ activeSheet + 1 }} 张）</h3>
-          <div class="card-sub">点击任意一步可跳转高亮；相邻共边照片的切割线已合并成一条</div>
+          <div class="card-sub">
+            点击任意一步可跳转高亮；红色「裁不了」按当前设备
+            「{{ selectedCutter.name }}」逐刀判定；相邻共边照片的切割线已合并成一条
+          </div>
           <div class="steps">
             <div
               v-for="(c, i) in steps"
@@ -192,6 +256,27 @@ function goto(routeName: string) {
               <span class="idx">{{ i + 1 }}</span>
               <span>{{ describe(c, i) }}</span>
               <span v-if="c.merged" class="badge ok">共边合并</span>
+              <span
+                v-if="sheetVerdict?.measures[i]"
+                class="badge"
+                :class="
+                  sheetVerdict.measures[i].internal &&
+                  sheetVerdict.measures[i].stripMm + 1e-6 < selectedCutter.minStripMm
+                    ? 'danger'
+                    : 'ok'
+                "
+                :title="
+                  sheetVerdict.measures[i].internal
+                    ? `刀长 ${sheetVerdict.measures[i].lengthMm}mm / 夹出成品条 ${sheetVerdict.measures[i].stripMm}mm / 设备最小条宽 ${selectedCutter.minStripMm}mm`
+                    : `刀长 ${sheetVerdict.measures[i].lengthMm}mm / 外侧修边（纸边废料 ${sheetVerdict.measures[i].stripMm}mm，不参与条宽判定）`
+                "
+              >
+                <template v-if="sheetVerdict.measures[i].internal">
+                  条 {{ sheetVerdict.measures[i].stripMm.toFixed(1) }}mm
+                  {{ sheetVerdict.measures[i].stripMm + 1e-6 < selectedCutter.minStripMm ? '✗' : '✓' }}
+                </template>
+                <template v-else>修边</template>
+              </span>
             </div>
           </div>
         </div>
@@ -218,6 +303,11 @@ function goto(routeName: string) {
       <p class="mono">
         相纸 {{ paper.name }} {{ paper.wMm }}×{{ paper.hMm }}mm ｜ 隙距 {{ task.gapMm }}mm ｜
         刀宽补偿 {{ task.kerfMm }}mm ｜ 安全边 {{ task.safeEdgeMm }}mm
+      </p>
+      <p class="mono" v-if="sheetVerdict">
+        指定设备：{{ selectedCutter.name }}（最小条宽 {{ selectedCutter.minStripMm }}mm，单张
+        {{ selectedCutter.maxCutsPerSheet === 0 ? '刀数不限' : '至多 ' + selectedCutter.maxCutsPerSheet + ' 刀' }}）——
+        <b>{{ sheetVerdict.ok ? '本张判定：能裁' : '本张判定：' + sheetVerdict.failures.join(' + ') + '，勿上刀' }}</b>
       </p>
       <RulerScale unit="mm" :length-mm="100" />
       <p style="margin-top: 8px">请按 100% 实际大小打印（关闭「适应页面 / Fit to page」）。</p>

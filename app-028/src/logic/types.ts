@@ -2,6 +2,34 @@
 
 export type PaperKind = 'sheet' | 'roll'
 
+/** 裁切设备类型：裁刀（滚轮推刀）/ 铡刀（厚层闸刀）/ 电动裁切机（程控电刀） */
+export type CutterKind = 'trimmer' | 'guillotine' | 'electric'
+
+/**
+ * 裁切设备档案。
+ * - maxWmm/maxHmm：最大可裁幅面（mm），纸张可旋转 90° 后比对（短边对短边、长边对长边）
+ * - minWmm/minHmm：最小可裁幅面（mm），纸太小压不住 / 对不到靠规
+ * - minStripMm：最小能裁多窄的条（相邻两刀夹出的成品条宽下限）
+ * - bladeMm：刀口宽度（刀刃损耗 / 切缝宽度），排样要求的刀宽补偿 + 隙距不能小于它
+ * - maxLayers：单次可裁层数（一次压几层相纸）
+ * - maxCutsPerSheet：每张纸最多切几刀（0 = 不限；程控电刀按刀序步数计价时设置）
+ */
+export interface Cutter {
+  id: string
+  name: string
+  kind: CutterKind
+  maxWmm: number
+  maxHmm: number
+  minWmm: number
+  minHmm: number
+  minStripMm: number
+  bladeMm: number
+  maxLayers: number
+  maxCutsPerSheet: number
+  note: string
+  builtin?: boolean
+}
+
 export interface Paper {
   id: string
   name: string

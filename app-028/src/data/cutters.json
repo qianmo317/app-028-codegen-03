@@ -1,0 +1,46 @@
+{
+  "cutters": [
+    {
+      "id": "m-trimmer",
+      "name": "1 号滚轮裁刀（A4 推刀）",
+      "kind": "trimmer",
+      "maxWmm": 320,
+      "maxHmm": 460,
+      "minWmm": 40,
+      "minHmm": 40,
+      "minStripMm": 8,
+      "bladeMm": 0.3,
+      "maxLayers": 1,
+      "maxCutsPerSheet": 0,
+      "note": "手工滚轮推刀，窄条最稳，只能单层裁；8×10 及以下相纸用它"
+    },
+    {
+      "id": "m-guillotine",
+      "name": "2 号厚层铡刀（A3 闸刀）",
+      "kind": "guillotine",
+      "maxWmm": 460,
+      "maxHmm": 620,
+      "minWmm": 60,
+      "minHmm": 80,
+      "minStripMm": 20,
+      "bladeMm": 0.5,
+      "maxLayers": 10,
+      "maxCutsPerSheet": 0,
+      "note": "一次最多压 10 层；条太窄压不住，20mm 以下的条别上这台；可切 A3"
+    },
+    {
+      "id": "m-electric",
+      "name": "3 号程控电动裁切机",
+      "kind": "electric",
+      "maxWmm": 520,
+      "maxHmm": 760,
+      "minWmm": 80,
+      "minHmm": 100,
+      "minStripMm": 30,
+      "bladeMm": 1.2,
+      "maxLayers": 8,
+      "maxCutsPerSheet": 18,
+      "note": "12×18 / A3+ 大幅面；切缝宽 1.2mm，共边窄条与刀数超限的单不要排这台"
+    }
+  ]
+}

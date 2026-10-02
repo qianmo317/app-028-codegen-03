@@ -11,7 +11,9 @@ import {
 } from './logic/library'
 import { pack, sheetsFromPlacements } from './logic/packer'
 import { loadJSON, saveJSON } from './logic/storage'
+import cuttersJson from './data/cutters.json'
 import type {
+  Cutter,
   Leftover,
   Paper,
   PaperTemplate,
@@ -29,7 +31,13 @@ const KEY = {
   settings: 'ppis.settings.v1',
   tasks: 'ppis.tasks.v1',
   leftovers: 'ppis.leftovers.v1',
+  customCutters: 'ppis.customCutters.v1',
+  selectedCutter: 'ppis.selectedCutter.v1',
 }
+
+export const BUILTIN_CUTTERS: Cutter[] = (cuttersJson.cutters as Omit<Cutter, 'builtin'>[]).map(
+  (c) => ({ ...(c as Cutter), builtin: true }),
+)
 
 export const DEFAULT_SETTINGS: Settings = {
   gapMm: 0,
@@ -44,16 +52,47 @@ export const customSizes = ref<PhotoSize[]>(loadJSON<PhotoSize[]>(KEY.customSize
 export const settings = ref<Settings>({ ...DEFAULT_SETTINGS, ...loadJSON(KEY.settings, {}) })
 export const tasks = ref<Task[]>(loadJSON<Task[]>(KEY.tasks, []))
 export const leftovers = ref<Leftover[]>(loadJSON<Leftover[]>(KEY.leftovers, []))
+export const customCutters = ref<Cutter[]>(loadJSON<Cutter[]>(KEY.customCutters, []))
+/** 当前在排样 / 裁切步骤页选中的设备（全局记住，换任务也保留） */
+export const selectedCutterId = ref<string>(
+  loadJSON<string>(KEY.selectedCutter, BUILTIN_CUTTERS[0].id),
+)
 
 watch(customPapers, (v) => saveJSON(KEY.customPapers, v), { deep: true })
 watch(customSizes, (v) => saveJSON(KEY.customSizes, v), { deep: true })
 watch(settings, (v) => saveJSON(KEY.settings, v), { deep: true })
 watch(tasks, (v) => saveJSON(KEY.tasks, v), { deep: true })
 watch(leftovers, (v) => saveJSON(KEY.leftovers, v), { deep: true })
+watch(customCutters, (v) => saveJSON(KEY.customCutters, v), { deep: true })
+watch(selectedCutterId, (v) => saveJSON(KEY.selectedCutter, v))
 
 export const allPapers = computed<Paper[]>(() => [...BUILTIN_PAPERS, ...customPapers.value])
 export const allSizes = computed<PhotoSize[]>(() => [...BUILTIN_PHOTO_SIZES, ...customSizes.value])
 export const templates = computed<PaperTemplate[]>(() => BUILTIN_TEMPLATES)
+export const allCutters = computed<Cutter[]>(() => [...BUILTIN_CUTTERS, ...customCutters.value])
+
+/** 当前选中的设备（被删后回退到第一台） */
+export const selectedCutter = computed<Cutter>(
+  () =>
+    allCutters.value.find((c) => c.id === selectedCutterId.value) ??
+    allCutters.value[0] ??
+    BUILTIN_CUTTERS[0],
+)
+
+export function selectCutter(id: string): void {
+  selectedCutterId.value = id
+}
+
+export function addCustomCutter(c: Omit<Cutter, 'id' | 'builtin'>): Cutter {
+  const cutter: Cutter = { ...c, id: newId('cutter') }
+  customCutters.value = [...customCutters.value, cutter]
+  return cutter
+}
+
+export function removeCustomCutter(id: string): void {
+  customCutters.value = customCutters.value.filter((c) => c.id !== id)
+  if (selectedCutterId.value === id) selectedCutterId.value = BUILTIN_CUTTERS[0].id
+}
 
 /** 照片文件只在本机内存里保留，绝不写入存储、绝不上传 */
 const photoCache = new Map<string, { url: string; ref: PhotoRef }>()

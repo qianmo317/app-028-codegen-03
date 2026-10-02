@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import SheetView from '../components/SheetView.vue'
 import UtilizationBar from '../components/UtilizationBar.vue'
+import CutterPanel from '../components/CutterPanel.vue'
 import {
   addLeftover,
   allPapers,
@@ -369,6 +370,15 @@ watch(
       </div>
 
       <div class="stack">
+        <div class="card">
+          <h3>设备判定</h3>
+          <div class="card-sub">
+            拿当前切割步骤逐台逐刀判定（每刀刀长、相邻两刀夹出的条宽、本张总刀数）；
+            手工拖动调过摆位后这里会立刻重新判定。换一台机器就要换纸时，红色提示当场说明，不用等裁到一半
+          </div>
+          <CutterPanel :task="task" :paper="paper" :sheets="sheets" variant="compact" />
+        </div>
+
         <div class="card">
           <h3>利用率与张数</h3>
           <UtilizationBar

@@ -6,7 +6,8 @@ import { BUILTIN_PAPERS, BUILTIN_PHOTO_SIZES } from './library'
 import { pack, sheetsFromPlacements, usableRegion, type PackGroup, type PackOptions } from './packer'
 import { buildPdf } from './pdf'
 import { MM_TO_PT, mmToPt, mmToPx, pxToMm } from './units'
-import type { Paper, Placement, Sheet } from './types'
+import { FAIL_LABEL, judgeCutter, judgeSheet, replayCuts, slotsOfSheet } from './cutter'
+import type { Cutter, Paper, Placement, Sheet } from './types'
 
 export interface AssertionResult {
   id: string
@@ -482,6 +483,155 @@ function assertPerformance(): AssertionResult {
   }
 }
 
+/** ⑧ 设备档案判定：幅面 / 条宽 / 刀数 / 刀口四类原因必须判得准，逐刀测量要与几何一致 */
+function assertCutterCapability(): AssertionResult {
+  const t0 = performance.now()
+  const problems: string[] = []
+
+  const makeCutter = (over: Partial<Cutter>): Cutter => ({
+    id: 'test',
+    name: '测试机',
+    kind: 'guillotine',
+    maxWmm: 3000,
+    maxHmm: 3000,
+    minWmm: 0,
+    minHmm: 0,
+    minStripMm: 1,
+    bladeMm: 0,
+    maxLayers: 1,
+    maxCutsPerSheet: 0,
+    note: '',
+    ...over,
+  })
+
+  // 用例 A：5×7 纸排 8 张 1 寸（25×35），共边刀、窄条约 25mm
+  const paper57 = BUILTIN_PAPERS.find((p) => p.id === 'p5x7') as Paper
+  const optsA: PackOptions = {
+    paperW: paper57.wMm,
+    paperH: paper57.hMm,
+    marginMm: paper57.marginMm,
+    safeEdgeMm: 3,
+    gapMm: 0,
+    kerfMm: 0.5,
+    allowRotate: false,
+  }
+  const outA = pack(
+    [{ itemId: 'a', copies: 8, photoW: 25, photoH: 35, allowRotate: false, keepTogether: true }],
+    optsA,
+  )
+  if (outA.error || outA.result.sheets.length !== 1) {
+    problems.push(`用例 A 排样失败：${outA.error ?? `${outA.result.sheets.length} 张纸`}`)
+    return { id: 'cutter', title: '⑧ 设备档案判定', pass: false, detail: problems.join('；'), ms: 0 }
+  }
+  const sheetA = outA.result.sheets[0]
+
+  // 逐刀重放：刀长必须为正数、不超过纸面、夹出条宽必须为正数且不超过纸面
+  const replay = replayCuts(usableRegion(optsA)!, slotsOfSheet(sheetA, optsA), sheetA)
+  if (!replay) {
+    problems.push('用例 A 切割序列重放失败')
+  } else {
+    for (const m of replay.items.map((i) => i.measure)) {
+      if (!(m.lengthMm > 0) || m.lengthMm > paper57.hMm + EPS) {
+        problems.push(`第 ${m.index + 1} 刀刀长异常：${m.lengthMm}`)
+      }
+      if (!(m.stripMm > 0) || m.stripMm > Math.max(paper57.wMm, paper57.hMm) + EPS) {
+        problems.push(`第 ${m.index + 1} 刀夹出条宽异常：${m.stripMm}`)
+      }
+    }
+    // 最窄成品条（只看照片之间的共边刀）应约为照片短边 25mm；外侧修边刀不计
+    const internal = replay.items.map((i) => i.measure).filter((m) => m.internal)
+    if (!internal.length) problems.push('8 张 1 寸的共边排样应至少有 1 刀内部共边刀')
+    const narrow = Math.min(...internal.map((m) => m.stripMm))
+    if (narrow < 20 || narrow > 30) {
+      problems.push(`8 张 1 寸最窄成品条 ${narrow.toFixed(1)}mm 不在预期 25mm 附近`)
+    }
+  }
+
+  // A1：能力足够的机器必须判通过（裁刀：幅面 320×460、最小条宽 8mm）
+  const capable = makeCutter({ maxWmm: 320, maxHmm: 460, minStripMm: 8, bladeMm: 0.3 })
+  const vCapable = judgeCutter(outA.result.sheets, paper57, optsA, capable)
+  if (!vCapable.ok) {
+    problems.push(`能力足够的机器误判为不能裁：${vCapable.sheets[0]?.details.join('；')}`)
+  }
+
+  // A2：幅面超了 —— 最大幅面小于纸张
+  const smallFmt = makeCutter({ maxWmm: 100, maxHmm: 100, minStripMm: 1 })
+  const vFmt = judgeSheet(sheetA, paper57, optsA, smallFmt)
+  if (vFmt.ok || !vFmt.failures.includes('format')) {
+    problems.push('小幅面机器应判「幅面超了」')
+  }
+
+  // A3：有条太窄 —— 最小条宽大于实际最窄条（30mm > ~25mm），幅面给足
+  const wideStrip = makeCutter({ minStripMm: 30 })
+  const vStrip = judgeSheet(sheetA, paper57, optsA, wideStrip)
+  if (vStrip.ok || !vStrip.failures.includes('strip')) {
+    problems.push(`窄条用例应判「有条太窄」，实际 ${vStrip.failures.map((f) => FAIL_LABEL[f]).join(',')}，最窄条 ${vStrip.narrowestStripMm}mm`)
+  }
+
+  // A3b：外侧修边刀切出的纸边废料（约 13mm）不应触发条宽判定 —— 最小条宽 20mm 的铡刀应判通过
+  const trimOk = makeCutter({ maxWmm: 320, maxHmm: 460, minStripMm: 20, bladeMm: 0.3 })
+  const vTrim = judgeSheet(sheetA, paper57, optsA, trimOk)
+  if (!vTrim.ok) {
+    problems.push(`最小条宽 20mm 的铡刀应能裁最窄成品条 25.5mm 的 1 寸版（修边废料不算）：${vTrim.details.join('；')}`)
+  }
+
+  // A4：刀数太多 —— 上限 1 刀
+  const cutLimit = makeCutter({ minStripMm: 1, maxCutsPerSheet: 1 })
+  const vCuts = judgeSheet(sheetA, paper57, optsA, cutLimit)
+  if (vCuts.ok || !vCuts.failures.includes('cuts')) {
+    problems.push(`刀数上限 1 应判「刀数太多」（本张 ${sheetA.cutSteps.length} 刀）`)
+  }
+
+  // A5：刀口太宽 —— 设备刀口 2mm > 共边切缝 0.5mm
+  const wideBlade = makeCutter({ minStripMm: 1, bladeMm: 2 })
+  const vBlade = judgeSheet(sheetA, paper57, optsA, wideBlade)
+  if (vBlade.ok || !vBlade.failures.includes('blade')) {
+    problems.push('宽刀口设备应判「刀口太宽」')
+  }
+
+  // A6：最小可裁幅面 —— 纸太小（把设备最小幅面设得比 5×7 大）
+  const minFmt = makeCutter({ minWmm: 200, minHmm: 300 })
+  const vMin = judgeSheet(sheetA, paper57, optsA, minFmt)
+  if (vMin.ok || !vMin.failures.includes('format')) {
+    problems.push('小于设备最小幅面的相纸应判「幅面」问题')
+  }
+
+  // 用例 B：幅面旋转 90° 后应能判通过（maxW < 纸宽 但 maxH >= 纸宽，另一轴也覆盖）
+  const rotated = makeCutter({ maxWmm: 178, maxHmm: 320, minStripMm: 8, bladeMm: 0.3 })
+  const vRot = judgeSheet(sheetA, paper57, optsA, rotated)
+  if (!vRot.ok) {
+    problems.push('纸张旋转 90° 后能放下的机器误判为幅面超了')
+  }
+
+  // 用例 C：手工微调后的排样（sheetsFromPlacements）也必须能判 —— 同一摆放重算后结论一致
+  const placements: Placement[] = outA.result.sheets.flatMap((s) => s.placements)
+  const rebuilt = sheetsFromPlacements(placements, optsA, 1)
+  if (rebuilt.errors.length) problems.push('用例 A 自动排样重建失败')
+  const vRebuilt = judgeSheet(rebuilt.sheets[0], paper57, optsA, wideStrip)
+  if (vRebuilt.ok || !vRebuilt.failures.includes('strip')) {
+    problems.push('手工微调重建后的方案未复判出「有条太窄」')
+  }
+
+  // 汇总指标必须自洽：cutCount = 实际步数，longestCut <= 纸面长边
+  const metrics = judgeSheet(sheetA, paper57, optsA, capable)
+  if (metrics.cutCount !== sheetA.cutSteps.length) {
+    problems.push(`判定刀数 ${metrics.cutCount} 与切割步骤数 ${sheetA.cutSteps.length} 不一致`)
+  }
+  if (metrics.longestCutMm > Math.max(paper57.wMm, paper57.hMm) + EPS) {
+    problems.push('最长一刀超过纸面尺寸')
+  }
+
+  return {
+    id: 'cutter',
+    title: '⑧ 设备档案：逐刀判定幅面 / 条宽 / 刀数 / 刀口四类原因，手工微调后可复判',
+    pass: problems.length === 0,
+    detail: problems.length
+      ? problems.join('；')
+      : `8 张 1 寸（5×7，共 ${sheetA.cutSteps.length} 刀，最窄条 ${metrics.narrowestStripMm.toFixed(1)}mm，最长一刀 ${metrics.longestCutMm.toFixed(1)}mm）：能力足够机判通过；小幅面/窄条宽/刀数 1/刀口 2mm/最小幅面五种机器分别准确判出「${FAIL_LABEL.format}」「${FAIL_LABEL.strip}」「${FAIL_LABEL.cuts}」「${FAIL_LABEL.blade}」；旋转 90° 可放、手工微调后复判均正确`,
+    ms: Math.round(performance.now() - t0),
+  }
+}
+
 export async function runSelfTest(): Promise<AssertionResult[]> {
   const results: AssertionResult[] = []
   results.push(assertGuillotine())
@@ -501,5 +651,6 @@ export async function runSelfTest(): Promise<AssertionResult[]> {
     })
   }
   results.push(assertPerformance())
+  results.push(assertCutterCapability())
   return results
 }
